@@ -21,6 +21,7 @@
 #include <sensor_drivers/BNO.h>
 #include <sensor_drivers/Lps22.h>
 #include <telemetry/telStruct.h>
+#include <control/ControlStruct.h>
 
 const bool SIMULATION_MODE = false;
 const bool USE_BNO080 = true;
@@ -72,6 +73,17 @@ StatusIndicator statusIndicator = StatusIndicator(
     PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
 BNO bno080;
 Bilda airbrakes;
+Bilda airbrakes_2;
+
+// Control system I2C
+#define CTRL_TEENSY_ADDR 0x42
+const bool USE_CONTROL = true;
+unsigned long lastControlSend = 0;
+const unsigned long CONTROL_INTERVAL_MS = 50;
+bool controlTeensyConnected = false;
+bool i2cFallback = false;  // True if I2C to control Teensy fails
+int i2cFailCount = 0;
+const int I2C_FAIL_THRESHOLD = 10;  // Switch to fallback after N failures
 
 // State machine //
 States state = States::BOOT;
@@ -91,6 +103,7 @@ void setup() {
   pinMode(PinDefs.IGNITER_1, OUTPUT);
 
   airbrakes.begin(PinDefs.SERVO);
+  airbrakes_2.begin(PinDefs.SERVO_2);
 
   while (!Serial1) {
     statusIndicator.solid(StatusIndicator::RED);
@@ -251,6 +264,10 @@ void loop() {
       accel_z = values[3];
       pressure = values[4];
       temperature = values[5];
+      // SHITL CSV only has one accel column — mirror to high-g
+      accel_x_high_g = accel_x;
+      accel_y_high_g = accel_y;
+      accel_z_high_g = accel_z;
     }
   } else {
     adxl345.readAccelerometer(&accel_x, &accel_y, &accel_z);
@@ -328,6 +345,7 @@ void loop() {
         airbrake_direction = 1;
       }
       airbrakes.setExtension(airbrake_pct);
+      airbrakes_2.setExtension(airbrake_pct);
     }
 
     break;
@@ -345,33 +363,32 @@ void loop() {
 
     max_altitude = max(max_altitude, altitude);
 
-    // Airbrake control logic
-    if (millis() - ignition_time > 12000 ||
-        millis() - motor_burnout_time > 8000) {
-
-      // Sweep: 0% to 60% and back, 10% steps, 1.0s hold (1.5s when fully
-      // closed)
-      if (millis() - last_airbrake_update >=
-          (airbrake_pct <= AIRBRAKE_MIN ? 1500 : 1000)) {
-        last_airbrake_update = millis();
-
-        airbrake_pct += 25.0 * airbrake_direction;
-
-        // Clamp and reverse direction
-        if (airbrake_pct >= AIRBRAKE_MAX) {
-          airbrake_pct = AIRBRAKE_MAX;
-          airbrake_direction = -2; // bring straight back to 0
-        } else if (airbrake_pct <= AIRBRAKE_MIN) {
-          airbrake_pct = AIRBRAKE_MIN;
-          airbrake_direction = 1;
+    if (!USE_CONTROL || i2cFallback) {
+      // Fallback: open-loop sweep if control Teensy unavailable
+      if (millis() - ignition_time > 12000 ||
+          millis() - motor_burnout_time > 8000) {
+        if (millis() - last_airbrake_update >=
+            (airbrake_pct <= AIRBRAKE_MIN ? 1500 : 1000)) {
+          last_airbrake_update = millis();
+          airbrake_pct += 25.0 * airbrake_direction;
+          if (airbrake_pct >= AIRBRAKE_MAX) {
+            airbrake_pct = AIRBRAKE_MAX;
+            airbrake_direction = -2;
+          } else if (airbrake_pct <= AIRBRAKE_MIN) {
+            airbrake_pct = AIRBRAKE_MIN;
+            airbrake_direction = 1;
+          }
+          airbrakes.setExtension(airbrake_pct);
+          airbrakes_2.setExtension(airbrake_pct);
         }
-        airbrakes.setExtension(airbrake_pct);
       }
     }
+    // Closed-loop control is handled by ControlPacket/CommandPacket below
 
     // Check for apogee conditions (time based)
     if (millis() - ignition_time > 30000) {
       airbrakes.setExtension(AIRBRAKE_MIN);
+      airbrakes_2.setExtension(AIRBRAKE_MIN);
       airbrake_pct = AIRBRAKE_MIN;
       airbrake_direction = 1;
       state = States::APOGEE;
@@ -408,47 +425,61 @@ void loop() {
 
   delay(50);
 
-  // if (USE_TELEMETRY &&
-  //     (millis() - lastTelemetrySend >= 50U)) { // send every 50 ms
-  //   TelemetryPacket pkt;
+  // ---------- Control Teensy I2C: send ControlPacket, receive CommandPacket ----------
+  if (USE_CONTROL && !i2cFallback &&
+      (millis() - lastControlSend >= CONTROL_INTERVAL_MS)) {
 
-  //   pkt.time_ms = millis();
-  //   pkt.accel_x = accel_x;
-  //   pkt.accel_y = accel_y;
-  //   pkt.accel_z = accel_z;
-  //   pkt.accel_x_high_g = accel_x_high_g;
-  //   pkt.accel_y_high_g = accel_y_high_g;
-  //   pkt.accel_z_high_g = accel_z_high_g;
-  //   pkt.pressure = pressure;
-  //   pkt.temperature = temperature;
-  //   pkt.altitude = altitude;
-  //   pkt.bno_x = bno_x;
-  //   pkt.bno_y = bno_y;
-  //   pkt.bno_z = bno_z;
-  //   pkt.bno_i = bno_i;
-  //   pkt.bno_j = bno_j;
-  //   pkt.bno_k = bno_k;
-  //   pkt.bno_real = bno_real;
-  //   pkt.state = static_cast<uint8_t>(state);
-  //   pkt.crc = computeCRC((uint8_t *)&pkt, sizeof(pkt) - 1);
+    // Build ControlPacket
+    ControlPacket ctrlPkt;
+    ctrlPkt.time_ms = millis();
+    ctrlPkt.pressure = pressure;
+    ctrlPkt.temperature = temperature;
+    ctrlPkt.accel_z_low_g = accel_y;     // Y-axis is thrust axis
+    ctrlPkt.accel_z_high_g = accel_y_high_g;
+    ctrlPkt.baro_altitude = altitude;
+    ctrlPkt.flight_state = static_cast<uint8_t>(state);
+    ctrlPkt.crc = computeControlCRC((uint8_t *)&ctrlPkt, sizeof(ctrlPkt) - 1);
 
-  //   Wire.beginTransmission(TEENSY_I2C_ADDR);
-  //   Wire.write((uint8_t *)&pkt, sizeof(pkt));
-  //   uint8_t result = Wire.endTransmission();
+    // Send ControlPacket to Teensy
+    Wire.beginTransmission(CTRL_TEENSY_ADDR);
+    Wire.write((uint8_t *)&ctrlPkt, sizeof(ctrlPkt));
+    uint8_t result = Wire.endTransmission();
 
-  //   if (result != 0) {
-  //     delay(5);
-  //     Wire.beginTransmission(TEENSY_I2C_ADDR);
-  //     Wire.write((uint8_t *)&pkt, sizeof(pkt));
-  //     result = Wire.endTransmission();
-  //     if (result != 0) {
-  //       Serial1.print("I2C retry failed: ");
-  //       Serial1.println(result);
-  //     }
-  //   }
-  //   Serial1.print("Telemetry packet size: ");
-  //   Serial1.println(sizeof(TelemetryPacket));
+    if (result != 0) {
+      i2cFailCount++;
+      if (i2cFailCount >= I2C_FAIL_THRESHOLD) {
+        i2cFallback = true;
+        Serial1.println("Control Teensy I2C failed, switching to fallback");
+      }
+    } else {
+      i2cFailCount = 0;
 
-  //   lastTelemetrySend = millis();
-  // }
+      // Request CommandPacket back from Teensy
+      uint8_t bytesRead = Wire.requestFrom(CTRL_TEENSY_ADDR,
+                                            (uint8_t)sizeof(CommandPacket));
+      if (bytesRead == sizeof(CommandPacket)) {
+        CommandPacket cmdPkt;
+        uint8_t *cmdBuf = (uint8_t *)&cmdPkt;
+        for (size_t i = 0; i < sizeof(CommandPacket); i++) {
+          cmdBuf[i] = Wire.read();
+        }
+
+        // Validate CRC
+        uint8_t cmdCrc = computeControlCRC(cmdBuf, sizeof(CommandPacket) - 1);
+        if (cmdPkt.crc == cmdCrc) {
+          // Apply servo commands during ASCENT
+          if (state == States::ASCENT) {
+            airbrakes.setExtension(cmdPkt.servo_angle_1);
+            airbrakes_2.setExtension(cmdPkt.servo_angle_2);
+            airbrake_pct = cmdPkt.servo_angle_1;
+          }
+        }
+      } else {
+        // Drain any partial data
+        while (Wire.available()) Wire.read();
+      }
+    }
+
+    lastControlSend = millis();
+  }
 }

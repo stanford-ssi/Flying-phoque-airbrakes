@@ -18,6 +18,7 @@ public:
     const int IGNITER_SENSE_1;
 
     const int SERVO;
+    const int SERVO_2;
 
     const int BUZZER;
 

@@ -13,6 +13,7 @@ PinDefinitions::PinDefinitions():
     IGNITER_SENSE_1(PB1),
 
     SERVO(PA1),
+    SERVO_2(PB6),
 
     BUZZER(PA3),
 
@@ -46,6 +47,7 @@ void PinDefinitions::setupPins() {
     pinMode(IGNITER_SENSE_1, INPUT);
 
     pinMode(SERVO, OUTPUT);
+    pinMode(SERVO_2, OUTPUT);
 
     pinMode(BUZZER, OUTPUT);
 
