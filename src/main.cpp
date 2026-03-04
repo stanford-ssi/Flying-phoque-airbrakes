@@ -4,6 +4,8 @@
  *********************************************************************/
 #define TEENSY_I2C_ADDR 0x42
 #define I2C_BUFFER_LENGTH 128
+#define DEBUG_MODE 0 // Set to 0 for flight, 1 for bench testing
+
 
 #include <Arduino.h>
 #include <Logging.h>
@@ -59,7 +61,7 @@ int airbrake_direction = 1; // 1 = extend, -1 = retract
 unsigned long last_airbrake_update = 0;
 int failedSensors = 0;
 
-Logging logging(true, true, PinDefs.SD_CS);
+Logging logging(DEBUG_MODE, true, PinDefs.SD_CS); // DEBUG_MODE ? true : false
 File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
