@@ -16,12 +16,13 @@ struct ControlPacket {
 
 // CommandPacket: Teensy → STM32 (18 bytes)
 struct CommandPacket {
-  float servo_angle_1;       // 4 bytes (percentage 0-100)
-  float servo_angle_2;       // 4 bytes (percentage 0-100)
-  float cd_add_cmd;          // 4 bytes (additional Cd commanded)
-  float predicted_apogee;    // 4 bytes (meters AGL)
-  uint8_t controller_state;  // 1 byte
-  uint8_t crc;               // 1 byte
+  float servo_angle_1;           // 4 bytes (percentage 0-100)
+  float servo_angle_2;           // 4 bytes (percentage 0-100)
+  float cd_add_cmd;              // 4 bytes (additional Cd commanded)
+  float predicted_apogee;        // 4 bytes (meters AGL)
+  uint8_t controller_state;      // 1 byte
+  uint16_t potentiometer_value;  // 2 bytes (0-1023)
+  uint8_t crc;                   // 1 byte
 } __attribute__((packed));
 
 inline uint8_t computeControlCRC(const uint8_t *data, size_t len) {

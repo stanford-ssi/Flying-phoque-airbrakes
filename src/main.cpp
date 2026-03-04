@@ -1,98 +1,219 @@
-/**********************************************************************
- *  Swap-in version that uses SparkFun_BNO080_Arduino_Library instead
- *  of Adafruit_BNO08x.  All other code is unchanged.
- *********************************************************************/
-#define TEENSY_I2C_ADDR 0x42
 #define I2C_BUFFER_LENGTH 128
 #define DEBUG_MODE 0  // Set to 0 for flight, 1 for bench testing
 
 #include <Arduino.h>
+#include <Globals.h>
 #include <Logging.h>
+#include <PhysicsConstants.h>
 #include <PinDefinitions.h>
 #include <SD.h>
 #include <SPI.h>
-#include <States.h>
+#include <StateMachine.h>
 #include <Wire.h>
 #include <control/ControlStruct.h>
-#include <peripherals/Bilda.h>
-#include <peripherals/Igniter.h>
-#include <peripherals/StatusIndicator.h>
 #include <sensor_drivers/Adxl.h>
 #include <sensor_drivers/BNO.h>
 #include <sensor_drivers/Lps22.h>
-#include <telemetry/telStruct.h>
 
-const bool SIMULATION_MODE = false;
-const bool USE_BNO080 = true;
-const float AIRBRAKE_MIN = 10.0;
-const float AIRBRAKE_MAX = 60.0;
+#define SIMULATION_MODE 0
+#define USE_BNO080 1
+#define USE_TELEMETRY 0
 
-// Telemetry related //
-const bool USE_TELEMETRY = false;
-unsigned long lastTelemetrySend = 0;
-
-float accel_x, accel_y, accel_z;
-float accel_x_high_g, accel_y_high_g, accel_z_high_g;
-
-uint32_t mode;
-float position, velocity, current, torque;
-
-float pressure;
-float temperature;
-
-float p_ref = 0, t_ref = 0;
-
-int fire_time = 0;
-float max_altitude = 0.0;
-
-float bno_x, bno_y, bno_z;            // linear accel
-float bno_i, bno_j, bno_k, bno_real;  // quaternion (rotation vector)
-
-bool primaryIgniterConnected = false;
-bool backupIgniterConnected = false;
-bool hasCheckedForHorizontal = false;
-
-// Airbrake control globals
-int ignition_time = 0;
-int motor_burnout_time = 0;
-int last_actuation_time = 0;
-float airbrake_pct = AIRBRAKE_MIN;
-int airbrake_direction = 1;  // 1 = extend, -1 = retract
-unsigned long last_airbrake_update = 0;
-int failedSensors = 0;
-
-Logging logging(DEBUG_MODE, true, PinDefs.SD_CS);  // DEBUG_MODE ? true : false
-File dataFile;
+// Sensors
 Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
+BNO bno080;
+
+// Actuators
+Bilda airbrake_servo_1;
+Bilda airbrake_servo_2;
 Igniter primaryIgniter = Igniter(PinDefs.IGNITER_0, PinDefs.IGNITER_SENSE_0);
 Igniter backupIgniter = Igniter(PinDefs.IGNITER_1, PinDefs.IGNITER_SENSE_1);
+
+// Peripherals
+Logging logging(DEBUG_MODE, true, PinDefs.SD_CS);
 StatusIndicator statusIndicator =
     StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
-BNO bno080;
-Bilda airbrakes;
-Bilda airbrakes_2;
 
-// Control system I2C
-#define CTRL_TEENSY_ADDR 0x42
-const bool USE_CONTROL = true;
-unsigned long lastControlSend = 0;
-const unsigned long CONTROL_INTERVAL_MS = 50;
-bool controlTeensyConnected = false;
-bool i2cFallback = false;  // True if I2C to control Teensy fails
-int i2cFailCount = 0;
-const int I2C_FAIL_THRESHOLD = 10;  // Switch to fallback after N failures
-
-// State machine //
+// Shared state
+SensorData_t sensors;
+BrakeState_t BrakeState;
+FlightState_t FlightState;
+I2CControl_t I2CControl;
 States state = States::BOOT;
+int failed_sensors = 0;
 
+// Timers
 int last_sd_write = 0;
+unsigned long last_loop_time = 0;
 
-/* ---------- HELPER ------------------------------------------------- */
-void splitString(String data, char delimiter, String parts[], int maxParts) { /* unchanged */ }
+static struct {
+  float pressure = 0;
+  float temperature = 0;
+} RefCalibration;
 
-/* ---------- SETUP -------------------------------------------------- */
+static void calibrateSensors(Lps22 &lps) {
+  for (int i = 0; i < 10; i++) {
+    float p, t;
+    lps.readPressure(&p);
+    lps.readTemperature(&t);
+    RefCalibration.pressure += p;
+    RefCalibration.temperature += t;
+  }
+  RefCalibration.pressure /= 10.0f;
+  RefCalibration.temperature = (RefCalibration.temperature / 10.0f) + CELSIUS_TO_KELVIN;
+}
+
+template <typename T>  // generic sensor
+static bool initSensor(T &sensor, const char *name, int maxAttempts = 10) {
+  int attempts = 0;
+  while (!sensor.begin()) {
+    logging.log(name);
+    Serial1.print(F("Waiting for "));
+    Serial1.print(name);
+    Serial1.println(F("..."));
+    delay(1000);
+    if (++attempts >= maxAttempts) {
+      failed_sensors++;
+      return false;
+    }
+  }
+  Serial1.print(name);
+  Serial1.println(F(" initialized"));
+  return true;
+}
+
+static float altitudeDelta(float p, float T) {
+#if SIMULATION_MODE
+  float p_ref = SIM_PRESSURE_REF;
+  float T_ref = SIM_TEMPERATURE_REF;
+#else
+  float p_ref = RefCalibration.pressure;
+  float T_ref = RefCalibration.temperature;
+#endif
+  float Tbar = 0.5f * (T_ref + T);
+  return (Rd * Tbar / g0) * log(p_ref / p);
+}
+
+static float readSensors() {
+#if SIMULATION_MODE
+  Serial1.println("DATAREQUEST");
+  String line = Serial1.readStringUntil('\n');
+  line.trim();
+
+  int lastIndex = 0;
+  int index = 0;
+  float values[6];
+
+  for (int i = 0; i < (int)line.length(); i++) {
+    if (line[i] == ',' || i == (int)line.length() - 1) {
+      String part = line.substring(lastIndex, (i == (int)line.length() - 1) ? i + 1 : i);
+      values[index++] = part.toFloat();
+      lastIndex = i + 1;
+    }
+  }
+
+  if (index >= 6) {
+    sensors.accel_x = values[1];
+    sensors.accel_y = values[2];
+    sensors.accel_z = values[3];
+    sensors.pressure = values[4];
+    sensors.temperature = values[5];
+    sensors.accel_x_high_g = sensors.accel_x;
+    sensors.accel_y_high_g = sensors.accel_y;
+    sensors.accel_z_high_g = sensors.accel_z;
+  }
+#else
+  adxl345.readAccelerometer(&sensors.accel_x, &sensors.accel_y, &sensors.accel_z);
+  adxl375.readAccelerometer(&sensors.accel_x_high_g, &sensors.accel_y_high_g, &sensors.accel_z_high_g);
+  lps22.readPressure(&sensors.pressure);
+  lps22.readTemperature(&sensors.temperature);
+#endif
+
+  float altitude = altitudeDelta(sensors.pressure, sensors.temperature + CELSIUS_TO_KELVIN);
+
+#if USE_BNO080
+  if (bno080.dataAvailable()) {
+    bno080.getLinearAccelerometer(&sensors.bno_x, &sensors.bno_y, &sensors.bno_z);
+    bno080.getRotationVector(&sensors.bno_i, &sensors.bno_j, &sensors.bno_k, &sensors.bno_real);
+  }
+#endif
+
+  return altitude;
+}
+
+static void sendControlPacket(float altitude) {
+  if (!USE_CONTROL || I2CControl.fallback || (millis() - I2CControl.lastSend < CONTROL_INTERVAL_MS)) return;
+
+  ControlPacket controlPacket;
+  controlPacket.time_ms = millis();
+  controlPacket.pressure = sensors.pressure;
+  controlPacket.temperature = sensors.temperature;
+  controlPacket.accel_z_low_g = sensors.accel_y;  // Y-axis is thrust axis
+  controlPacket.accel_z_high_g = sensors.accel_y_high_g;
+  controlPacket.baro_altitude = altitude;
+  controlPacket.flight_state = static_cast<uint8_t>(state);
+  controlPacket.crc = computeControlCRC((uint8_t *)&controlPacket, sizeof(controlPacket) - 1);
+
+  Wire.beginTransmission(CTRL_TEENSY_ADDR);
+  Wire.write((uint8_t *)&controlPacket, sizeof(controlPacket));
+  uint8_t result = Wire.endTransmission();
+
+  if (result != 0) {
+    I2CControl.failCount++;
+    if (I2CControl.failCount >= I2C_FAIL_THRESHOLD) {
+      I2CControl.fallback = true;
+      Serial1.println(F("Control Teensy I2C failed, switching to fallback"));
+    }
+  } else {
+    I2CControl.failCount = 0;
+
+    uint8_t bytesRead = Wire.requestFrom(CTRL_TEENSY_ADDR, (uint8_t)sizeof(CommandPacket));
+    if (bytesRead == sizeof(CommandPacket)) {
+      CommandPacket cmdPkt;
+      uint8_t *cmdBuf = (uint8_t *)&cmdPkt;
+      for (size_t i = 0; i < sizeof(CommandPacket); i++) {
+        cmdBuf[i] = Wire.read();
+      }
+
+      uint8_t cmdCrc = computeControlCRC(cmdBuf, sizeof(CommandPacket) - 1);
+      if (cmdPkt.crc == cmdCrc) {
+        sensors.potentiometer_value = cmdPkt.potentiometer_value;
+        if (state == States::ASCENT) {
+          airbrake_servo_1.setExtension(cmdPkt.servo_angle_1);
+          airbrake_servo_2.setExtension(cmdPkt.servo_angle_2);
+          BrakeState.pct = cmdPkt.servo_angle_1;
+        }
+      }
+    } else {
+      // Drain any partial data
+      while (Wire.available()) Wire.read();
+    }
+  }
+
+  I2CControl.lastSend = millis();
+}
+
+static void logTelemetry(float altitude) {
+  LogBuffer buf;
+
+  buf.append("%lu", millis());
+  buf.append(",%.2f,%.2f,%.2f", sensors.accel_x, sensors.accel_y, sensors.accel_z);
+  buf.append(",%.2f,%.2f,%.2f", sensors.accel_x_high_g, sensors.accel_y_high_g, sensors.accel_z_high_g);
+  buf.append(",%.2f,%.2f,%.2f", sensors.pressure, sensors.temperature, altitude);
+  buf.append(",%.2f,%.2f,%.2f", sensors.bno_x, sensors.bno_y, sensors.bno_z);
+  buf.append(",%.4f,%.4f,%.4f,%.4f", sensors.bno_i, sensors.bno_j, sensors.bno_k, sensors.bno_real);
+  buf.append(",%s,%.1f,%d,%u", stateToString(state), BrakeState.pct, BrakeState.direction, sensors.potentiometer_value);
+
+  logging.log(buf.str());
+
+  if (millis() - last_sd_write > 1000) {
+    logging.flush();
+    last_sd_write = millis();
+  }
+}
+
 void setup() {
   Serial1.begin(115200);
 
@@ -100,374 +221,66 @@ void setup() {
   pinMode(PinDefs.IGNITER_0, OUTPUT);
   pinMode(PinDefs.IGNITER_1, OUTPUT);
 
-  airbrakes.begin(PinDefs.SERVO);
-  airbrakes_2.begin(PinDefs.SERVO_2);
+  airbrake_servo_1.begin(PinDefs.SERVO);
+  airbrake_servo_2.begin(PinDefs.SERVO_2);
 
   while (!Serial1) {
     statusIndicator.solid(StatusIndicator::RED);
   }
   statusIndicator.solid(StatusIndicator::RED);
 
-  // Hardware I2C initialization
   Wire.setSDA(PinDefs.SDA);
   Wire.setSCL(PinDefs.SCL);
   Wire.begin();
-  Wire.setClock(100000);  // 100 kHz
+  Wire.setClock(100000);
 
   delay(4000);  // allow sensors to power up
 
-  // SPI init
   SPI.setMOSI(PinDefs.SDI);
   SPI.setMISO(PinDefs.SDO);
   SPI.setSCLK(PinDefs.SCK);
   SPI.begin();
 
-  // ---------------- SD / Logging ----------------
   while (!logging.begin()) {
     statusIndicator.solid(StatusIndicator::RED);
     Serial1.println(F("Waiting for SD card..."));
     delay(1000);
   }
-
   Serial1.println(F("SD card initialized"));
 
-  // ---------------- Sensors ---------------------
-  // ADXL345
-  int adxl345_attempts = 0;
-  while (!adxl345.begin()) {
-    logging.log("Err ADXL345");
-    Serial1.println("Waiting for ADXL345...");
-    delay(1000);
-    adxl345_attempts++;
-    if (adxl345_attempts >= 10) {
-      failedSensors++;
-      break;
-    }
-  }
-  Serial1.println("ADXL345 initialized");
+  initSensor(adxl345, "ADXL345");
+  initSensor(adxl375, "ADXL375");
+  initSensor(lps22, "LPS22");
+#if USE_BNO080
+  initSensor(bno080, "BNO080");
+#endif
 
-  // ADXL375
-  int adxl375_attempts = 0;
-  while (!adxl375.begin()) {
-    logging.log("Err ADXL375");
-    Serial1.println("Waiting for ADXL375...");
-    delay(1000);
-    adxl375_attempts++;
-    if (adxl375_attempts >= 10) {
-      failedSensors++;
-      break;
-    }
-  }
-  Serial1.println("ADXL375 initialized");
+  calibrateSensors(lps22);
 
-  // LPS22
-  int lps_attempts = 0;
-  while (!lps22.begin()) {
-    logging.log("Err LPS22");
-    Serial1.println("Waiting for LPS22...");
-    delay(1000);
-    lps_attempts++;
-    if (lps_attempts >= 10) {
-      failedSensors++;
-      break;
-    }
-  }
-  Serial1.println("LPS22 initialized");
-
-  // BNO080 (optional)
-  if (USE_BNO080) {
-    int bno_attempts = 0;
-    Serial1.println("Attempting BNO080 initialization...");
-    while (!bno080.begin()) {
-      logging.log("ErrBNO080");
-      Serial1.print("Waiting for BNO080 (attempt ");
-      Serial1.print(bno_attempts + 1);
-      Serial1.println("/10)...");
-      delay(1000);
-      bno_attempts++;
-      if (bno_attempts >= 10) {
-        Serial1.println("BNO080 initialization failed. Continuing without BNO.");
-        failedSensors++;
-        break;
-      }
-    }
-    Serial1.println("BNO080 initialized successfully!");
-  }
-
-  // ---------------- Reference readings ----------------
-  for (int i = 0; i < 10; i++) {
-    float pressure, temperature;
-    lps22.readPressure(&pressure);
-    lps22.readTemperature(&temperature);
-    p_ref += pressure;
-  }
-  p_ref /= 10.0;
-
-  // ---------------- Log header ----------------
-  const String logHeading =
-      "Time\tXg\tYg\tZg\tXhg\tYhg\tZhg\tPressure\tTemperature\tAltitude\t"
-      "BNO_X\tBNO_Y\tBNO_Z\tBNO_I\tBNO_J\tBNO_K\tBNO_Real\tState\tAirbrake_"
-      "pct\tAirbrake_dir";
-  logging.log(logHeading.c_str());
+  logging.log(
+      "Time,Xg,Yg,Zg,Xhg,Yhg,Zhg,Pressure,Temperature,Altitude,"
+      "BNO_X,BNO_Y,BNO_Z,BNO_I,BNO_J,BNO_K,BNO_Real,State,"
+      "Airbrake_pct,Airbrake_dir,Potentiometer");
   logging.flush();
 
-  if (failedSensors > 0) {
+  if (failed_sensors > 0) {
     statusIndicator.solid(StatusIndicator::WHITE);
-    Serial1.println("Setup failed");
+    Serial1.println(F("Setup failed"));
     state = States::SENSOR_ERROR;
   } else {
     statusIndicator.solid(StatusIndicator::GREEN);
-    Serial1.println("Setup complete");
+    Serial1.println(F("Setup complete"));
     state = States::IDLE;
   }
 }
 
-float altitudeDelta(float p_ref, float p, float T_ref, float T) {
-  if (SIMULATION_MODE) {
-    p_ref = 1013.25;
-    T_ref = 293.15;
-  }
-  const float Rd = 287.05f;                  // J/(kg·K)
-  const float g0 = 9.80665f;                 // m/s^2
-  float Tbar = 0.5f * (T_ref + T);           // mean temperature (K)
-  return (Rd * Tbar / g0) * log(p_ref / p);  // meters
-}
-
-/* ---------- LOOP --------------------------------------------------- */
 void loop() {
-  /* Local sensors */
-  if (SIMULATION_MODE) {
-    Serial1.println("DATAREQUEST");
-    String line = Serial1.readStringUntil('\n');
-    line.trim();  // remove newline or spaces
+  unsigned long now = millis();
+  if (now - last_loop_time < LOOP_INTERVAL_MS) return;
+  last_loop_time = now;
 
-    int lastIndex = 0;
-    int index = 0;
-    float values[6];
-
-    for (int i = 0; i < line.length(); i++) {
-      if (line[i] == ',' || i == line.length() - 1) {
-        String part = line.substring(lastIndex, (i == line.length() - 1) ? i + 1 : i);
-        values[index++] = part.toFloat();
-        lastIndex = i + 1;
-      }
-    }
-
-    // Assign them directly
-    if (index >= 6) {
-      accel_x = values[1];
-      accel_y = values[2];
-      accel_z = values[3];
-      pressure = values[4];
-      temperature = values[5];
-      // SHITL CSV only has one accel column — mirror to high-g
-      accel_x_high_g = accel_x;
-      accel_y_high_g = accel_y;
-      accel_z_high_g = accel_z;
-    }
-  } else {
-    adxl345.readAccelerometer(&accel_x, &accel_y, &accel_z);
-    adxl375.readAccelerometer(&accel_x_high_g, &accel_y_high_g, &accel_z_high_g);
-    lps22.readPressure(&pressure);
-    lps22.readTemperature(&temperature);
-  }
-
-  float altitude = altitudeDelta(p_ref, pressure, t_ref, temperature + 273.15);
-
-  /* ------------  B N O 0 8 0  DATA  ------------------------------ */
-  if (USE_BNO080) {
-    if (bno080.dataAvailable()) {
-      bno080.getLinearAccelerometer(&bno_x, &bno_y, &bno_z);
-      bno080.getRotationVector(&bno_i, &bno_j, &bno_k, &bno_real);
-    }
-  }
-
-  const String logMessage = String(millis()) + ", " + String(accel_x) + ", " +  // ADXL345
-                            String(accel_y) + ", " + String(accel_z) + ", " +
-                            String(accel_x_high_g) + ", " +  // ADXL375 (high-g)
-                            String(accel_y_high_g) + ", " + String(accel_z_high_g) + ", " +
-                            String(pressure) + ", " + String(temperature) + ", " +
-                            String(altitude) + ", " + String(bno_x) + ", " + String(bno_y) + ", " +
-                            String(bno_z) + ", " + String(bno_i) + ", " + String(bno_j) + ", " +
-                            String(bno_k) + ", " + String(bno_real) + ", " + stateToString(state) +
-                            ", " + String(airbrake_pct) + ", " + String(airbrake_direction);
-
-  logging.log(logMessage.c_str());
-
-  if (millis() - last_sd_write > 1000) {
-    logging.flush();
-    last_sd_write = millis();
-  }
-
-  // State machine
-  switch (state) {
-    case States::SENSOR_ERROR:
-      statusIndicator.solid(StatusIndicator::WHITE);
-      delay(50);
-      break;
-    case States::IDLE:
-      statusIndicator.solid(StatusIndicator::GREEN);
-
-      if (accel_y > 8.0) {
-        state = States::IGNITION;
-        ignition_time = millis();
-      }
-
-      if (!hasCheckedForHorizontal) {
-        if (abs(accel_y) < abs(accel_x) || abs(accel_y) < abs(accel_z)) {
-          state = States::AIRBRAKE_TEST;
-          airbrake_direction = 1;
-          last_airbrake_update = 0;
-          airbrake_pct = AIRBRAKE_MIN;
-        }
-        hasCheckedForHorizontal = true;
-      }
-      break;
-    case States::AIRBRAKE_TEST:
-      statusIndicator.solid(StatusIndicator::BLUE);
-
-      // Sweep: 10% to 60% and back
-      if (millis() - last_airbrake_update >= (airbrake_pct <= AIRBRAKE_MIN ? 3000 : 1000)) {
-        last_airbrake_update = millis();
-        airbrake_pct += AIRBRAKE_MAX * airbrake_direction;
-        if (airbrake_pct >= AIRBRAKE_MAX) {
-          airbrake_pct = AIRBRAKE_MAX;
-          airbrake_direction = -1;
-        } else if (airbrake_pct <= AIRBRAKE_MIN) {
-          airbrake_pct = AIRBRAKE_MIN;
-          airbrake_direction = 1;
-        }
-        airbrakes.setExtension(airbrake_pct);
-        airbrakes_2.setExtension(airbrake_pct);
-      }
-
-      break;
-    case States::IGNITION:
-      statusIndicator.solid(StatusIndicator::ORANGE);
-
-      if (accel_y < 0) {
-        motor_burnout_time = millis();
-        state = States::ASCENT;
-      }
-
-      break;
-    case States::ASCENT:
-      statusIndicator.solid(StatusIndicator::RED);
-
-      max_altitude = max(max_altitude, altitude);
-
-      if (!USE_CONTROL || i2cFallback) {
-        // Fallback: open-loop sweep if control Teensy unavailable
-        if (millis() - ignition_time > 12000 || millis() - motor_burnout_time > 8000) {
-          if (millis() - last_airbrake_update >= (airbrake_pct <= AIRBRAKE_MIN ? 1500 : 1000)) {
-            last_airbrake_update = millis();
-            airbrake_pct += 25.0 * airbrake_direction;
-            if (airbrake_pct >= AIRBRAKE_MAX) {
-              airbrake_pct = AIRBRAKE_MAX;
-              airbrake_direction = -2;
-            } else if (airbrake_pct <= AIRBRAKE_MIN) {
-              airbrake_pct = AIRBRAKE_MIN;
-              airbrake_direction = 1;
-            }
-            airbrakes.setExtension(airbrake_pct);
-            airbrakes_2.setExtension(airbrake_pct);
-          }
-        }
-      }
-      // Closed-loop control is handled by ControlPacket/CommandPacket below
-
-      // Check for apogee conditions (time based)
-      if (millis() - ignition_time > 30000) {
-        airbrakes.setExtension(AIRBRAKE_MIN);
-        airbrakes_2.setExtension(AIRBRAKE_MIN);
-        airbrake_pct = AIRBRAKE_MIN;
-        airbrake_direction = 1;
-        state = States::APOGEE;
-        fire_time = millis();
-      }
-
-      break;
-    case States::APOGEE:
-      statusIndicator.solid(StatusIndicator::RED);
-
-      primaryIgniter.fire();
-
-      if (millis() - fire_time > 2000) {
-        state = States::DESCENT;
-      }
-
-      break;
-    case States::DESCENT:
-      statusIndicator.solid(StatusIndicator::BLUE);
-
-      if (altitude < 5.0) {
-        state = States::LANDED;
-      }
-
-      break;
-    case States::LANDED:
-      statusIndicator.solid(StatusIndicator::GREEN);
-
-      break;
-    default:
-      state = States::IDLE;
-      break;
-  }
-
-  delay(50);
-
-  // ---------- Control Teensy I2C: send ControlPacket, receive CommandPacket ----------
-  if (USE_CONTROL && !i2cFallback && (millis() - lastControlSend >= CONTROL_INTERVAL_MS)) {
-    // Build ControlPacket
-    ControlPacket ctrlPkt;
-    ctrlPkt.time_ms = millis();
-    ctrlPkt.pressure = pressure;
-    ctrlPkt.temperature = temperature;
-    ctrlPkt.accel_z_low_g = accel_y;  // Y-axis is thrust axis
-    ctrlPkt.accel_z_high_g = accel_y_high_g;
-    ctrlPkt.baro_altitude = altitude;
-    ctrlPkt.flight_state = static_cast<uint8_t>(state);
-    ctrlPkt.crc = computeControlCRC((uint8_t *)&ctrlPkt, sizeof(ctrlPkt) - 1);
-
-    // Send ControlPacket to Teensy
-    Wire.beginTransmission(CTRL_TEENSY_ADDR);
-    Wire.write((uint8_t *)&ctrlPkt, sizeof(ctrlPkt));
-    uint8_t result = Wire.endTransmission();
-
-    if (result != 0) {
-      i2cFailCount++;
-      if (i2cFailCount >= I2C_FAIL_THRESHOLD) {
-        i2cFallback = true;
-        Serial1.println("Control Teensy I2C failed, switching to fallback");
-      }
-    } else {
-      i2cFailCount = 0;
-
-      // Request CommandPacket back from Teensy
-      uint8_t bytesRead = Wire.requestFrom(CTRL_TEENSY_ADDR, (uint8_t)sizeof(CommandPacket));
-      if (bytesRead == sizeof(CommandPacket)) {
-        CommandPacket cmdPkt;
-        uint8_t *cmdBuf = (uint8_t *)&cmdPkt;
-        for (size_t i = 0; i < sizeof(CommandPacket); i++) {
-          cmdBuf[i] = Wire.read();
-        }
-
-        // Validate CRC
-        uint8_t cmdCrc = computeControlCRC(cmdBuf, sizeof(CommandPacket) - 1);
-        if (cmdPkt.crc == cmdCrc) {
-          // Apply servo commands during ASCENT
-          if (state == States::ASCENT) {
-            airbrakes.setExtension(cmdPkt.servo_angle_1);
-            airbrakes_2.setExtension(cmdPkt.servo_angle_2);
-            airbrake_pct = cmdPkt.servo_angle_1;
-          }
-        }
-      } else {
-        // Drain any partial data
-        while (Wire.available()) Wire.read();
-      }
-    }
-
-    lastControlSend = millis();
-  }
+  float altitude = readSensors();
+  updateStateMachine(altitude);
+  sendControlPacket(altitude);
+  logTelemetry(altitude);
 }

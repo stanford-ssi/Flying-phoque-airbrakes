@@ -84,12 +84,14 @@ bool Logging::begin() {
   return true;
 }
 
-void Logging::log(const char *message) {
+void Logging::log(const char *message, bool newline) {
   if (debug) {
-    Serial1.println(message);
+    if (newline) Serial1.println(message);
+    else Serial1.print(message);
   }
   if (logToSD) {
-    dataFile.println(message);
+    if (newline) dataFile.println(message);
+    else dataFile.print(message);
   }
 }
 
