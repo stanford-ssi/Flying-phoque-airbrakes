@@ -2,42 +2,42 @@
 #define PIN_DEFINITIONS_H
 
 class PinDefinitions {
-public:
-    // Constructor
-    PinDefinitions();
+ public:
+  // Constructor
+  PinDefinitions();
 
-    // Digital Pins
-    const int STATUS_LED_RED;
-    const int STATUS_LED_GREEN;
-    const int STATUS_LED_BLUE;
+  // Digital Pins
+  const int STATUS_LED_RED;
+  const int STATUS_LED_GREEN;
+  const int STATUS_LED_BLUE;
 
-    const int IGNITER_0;
-    const int IGNITER_1;
+  const int IGNITER_0;
+  const int IGNITER_1;
 
-    const int IGNITER_SENSE_0;
-    const int IGNITER_SENSE_1;
+  const int IGNITER_SENSE_0;
+  const int IGNITER_SENSE_1;
 
-    const int SERVO;
-    const int SERVO_2;
+  const int SERVO;
+  const int SERVO_2;
 
-    const int BUZZER;
+  const int BUZZER;
 
-    const int ESP32_CS;
-    const int SD_CS;
+  const int ESP32_CS;
+  const int SD_CS;
 
-    const int SCK;
-    const int SDI;
-    const int SDO;
+  const int SCK;
+  const int SDI;
+  const int SDO;
 
-    const int MCP_CS;
-    const int MCP_INT;
+  const int MCP_CS;
+  const int MCP_INT;
 
-    const int SDA;
-    const int SCL;
+  const int SDA;
+  const int SCL;
 
-    const int ARM;
+  const int ARM;
 
-    void setupPins();
+  void setupPins();
 };
 
 extern PinDefinitions PinDefs;

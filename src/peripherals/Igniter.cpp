@@ -1,4 +1,5 @@
 #include "Igniter.h"
+
 #include <Arduino.h>
 
 Igniter::Igniter(int igniterPin, int sensePin) {
@@ -8,13 +9,9 @@ Igniter::Igniter(int igniterPin, int sensePin) {
   firing = false;
 }
 
-void Igniter::arm() {
-  armed = true;
-}
+void Igniter::arm() { armed = true; }
 
-void Igniter::disarm() {
-  armed = false;
-}
+void Igniter::disarm() { armed = false; }
 
 void Igniter::fire() {
   if (armed) {
@@ -28,18 +25,10 @@ void Igniter::stop() {
   digitalWrite(igniterPin, LOW);
 }
 
-bool Igniter::isArmed() {
-  return armed;
-}
+bool Igniter::isArmed() { return armed; }
 
-bool Igniter::isFiring() {
-  return firing;
-}
+bool Igniter::isFiring() { return firing; }
 
-bool Igniter::igniterCheck() {
-  return analogRead(sensePin) > CONNECTION_THRESHOLD;
-}
+bool Igniter::igniterCheck() { return analogRead(sensePin) > CONNECTION_THRESHOLD; }
 
-int Igniter::readSensePin() {
-  return analogRead(sensePin);
-}
+int Igniter::readSensePin() { return analogRead(sensePin); }

@@ -1,4 +1,5 @@
 #include "Logging.h"
+
 #include <RTClib.h>
 #include <SD.h>
 
@@ -47,8 +48,7 @@ bool Logging::begin() {
   }
 
   if (!rtc.begin()) {
-    if (debug)
-      Serial1.println(F("RTC not found, using compile time"));
+    if (debug) Serial1.println(F("RTC not found, using compile time"));
     rtc_ready = false;
   } else {
     rtc_ready = true;

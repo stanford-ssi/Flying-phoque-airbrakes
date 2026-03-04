@@ -2,30 +2,23 @@
 #define STATUS_INDICATOR_H
 
 class StatusIndicator {
-public:
-    StatusIndicator(int redPin, int greenPin, int bluePin);
+ public:
+  StatusIndicator(int redPin, int greenPin, int bluePin);
 
-    enum Color {
-        RED,
-        GREEN,
-        BLUE,
-        ORANGE,
-        WHITE,
-        OFF
-    };
+  enum Color { RED, GREEN, BLUE, ORANGE, WHITE, OFF };
 
-    Color currentColor;
+  Color currentColor;
 
-    void flash(Color color, int durationMs);
-    void solid(Color color);
-    void off();
+  void flash(Color color, int durationMs);
+  void solid(Color color);
+  void off();
 
-private:
-    int redPin;
-    int greenPin;
-    int bluePin;
+ private:
+  int redPin;
+  int greenPin;
+  int bluePin;
 
-    int durationMs;
+  int durationMs;
 };
 
 #endif

@@ -5,24 +5,23 @@
 #include <SD.h>
 
 class Logging {
-public:
-    Logging(bool debug, bool logToSD, int SD_CS);
+ public:
+  Logging(bool debug, bool logToSD, int SD_CS);
 
-    void log(const char* message);
+  void log(const char* message);
 
-    bool begin();
+  bool begin();
 
-    void flush();
+  void flush();
 
-
-private:
-    bool debug;
-    bool logToSD;
-    int SD_CS;
-    int getNextLogFileNumber();
-    int logNumber;
-    String logFileName;
-    File dataFile;
+ private:
+  bool debug;
+  bool logToSD;
+  int SD_CS;
+  int getNextLogFileNumber();
+  int logNumber;
+  String logFileName;
+  File dataFile;
 };
 
 #endif

@@ -5,14 +5,14 @@
 #include <Servo.h>
 
 class Bilda {
-public:
+ public:
   Bilda();
   void begin(int pin);
-  void setExtension(float percentage); // 0.0 - 100.0
-  void retract();                      // 0%
-  void deploy();                       // 100%
+  void setExtension(float percentage);  // 0.0 - 100.0
+  void retract();                       // 0%
+  void deploy();                        // 100%
 
-private:
+ private:
   Servo _servo;
   int servoPin;
 };

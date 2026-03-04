@@ -1,4 +1,5 @@
 #include "StatusIndicator.h"
+
 #include <Arduino.h>
 
 StatusIndicator::StatusIndicator(int redPin, int greenPin, int bluePin) {
@@ -50,8 +51,7 @@ void StatusIndicator::flash(Color color, int durationMs) {
 
 void StatusIndicator::solid(Color color) {
   currentColor = color;
-  switch (color)
-  {
+  switch (color) {
     case RED:
       digitalWrite(redPin, LOW);
       digitalWrite(greenPin, HIGH);

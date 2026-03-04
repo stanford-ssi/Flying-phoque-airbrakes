@@ -4,8 +4,7 @@
  *********************************************************************/
 #define TEENSY_I2C_ADDR 0x42
 #define I2C_BUFFER_LENGTH 128
-#define DEBUG_MODE 0 // Set to 0 for flight, 1 for bench testing
-
+#define DEBUG_MODE 0  // Set to 0 for flight, 1 for bench testing
 
 #include <Arduino.h>
 #include <Logging.h>
@@ -14,6 +13,7 @@
 #include <SPI.h>
 #include <States.h>
 #include <Wire.h>
+#include <control/ControlStruct.h>
 #include <peripherals/Bilda.h>
 #include <peripherals/Igniter.h>
 #include <peripherals/StatusIndicator.h>
@@ -21,7 +21,6 @@
 #include <sensor_drivers/BNO.h>
 #include <sensor_drivers/Lps22.h>
 #include <telemetry/telStruct.h>
-#include <control/ControlStruct.h>
 
 const bool SIMULATION_MODE = false;
 const bool USE_BNO080 = true;
@@ -46,8 +45,8 @@ float p_ref = 0, t_ref = 0;
 int fire_time = 0;
 float max_altitude = 0.0;
 
-float bno_x, bno_y, bno_z;           // linear accel
-float bno_i, bno_j, bno_k, bno_real; // quaternion (rotation vector)
+float bno_x, bno_y, bno_z;            // linear accel
+float bno_i, bno_j, bno_k, bno_real;  // quaternion (rotation vector)
 
 bool primaryIgniterConnected = false;
 bool backupIgniterConnected = false;
@@ -58,19 +57,19 @@ int ignition_time = 0;
 int motor_burnout_time = 0;
 int last_actuation_time = 0;
 float airbrake_pct = AIRBRAKE_MIN;
-int airbrake_direction = 1; // 1 = extend, -1 = retract
+int airbrake_direction = 1;  // 1 = extend, -1 = retract
 unsigned long last_airbrake_update = 0;
 int failedSensors = 0;
 
-Logging logging(DEBUG_MODE, true, PinDefs.SD_CS); // DEBUG_MODE ? true : false
+Logging logging(DEBUG_MODE, true, PinDefs.SD_CS);  // DEBUG_MODE ? true : false
 File dataFile;
 Adxl adxl345 = Adxl(0x1D, ADXL345);
 Adxl adxl375 = Adxl(0x53, ADXL375);
 Lps22 lps22 = Lps22(0x5C);
 Igniter primaryIgniter = Igniter(PinDefs.IGNITER_0, PinDefs.IGNITER_SENSE_0);
 Igniter backupIgniter = Igniter(PinDefs.IGNITER_1, PinDefs.IGNITER_SENSE_1);
-StatusIndicator statusIndicator = StatusIndicator(
-    PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
+StatusIndicator statusIndicator =
+    StatusIndicator(PinDefs.STATUS_LED_RED, PinDefs.STATUS_LED_GREEN, PinDefs.STATUS_LED_BLUE);
 BNO bno080;
 Bilda airbrakes;
 Bilda airbrakes_2;
@@ -91,8 +90,7 @@ States state = States::BOOT;
 int last_sd_write = 0;
 
 /* ---------- HELPER ------------------------------------------------- */
-void splitString(String data, char delimiter, String parts[],
-                 int maxParts) { /* unchanged */ }
+void splitString(String data, char delimiter, String parts[], int maxParts) { /* unchanged */ }
 
 /* ---------- SETUP -------------------------------------------------- */
 void setup() {
@@ -114,9 +112,9 @@ void setup() {
   Wire.setSDA(PinDefs.SDA);
   Wire.setSCL(PinDefs.SCL);
   Wire.begin();
-  Wire.setClock(100000); // 100 kHz
+  Wire.setClock(100000);  // 100 kHz
 
-  delay(4000); // allow sensors to power up
+  delay(4000);  // allow sensors to power up
 
   // SPI init
   SPI.setMOSI(PinDefs.SDI);
@@ -188,8 +186,7 @@ void setup() {
       delay(1000);
       bno_attempts++;
       if (bno_attempts >= 10) {
-        Serial1.println(
-            "BNO080 initialization failed. Continuing without BNO.");
+        Serial1.println("BNO080 initialization failed. Continuing without BNO.");
         failedSensors++;
         break;
       }
@@ -230,10 +227,10 @@ float altitudeDelta(float p_ref, float p, float T_ref, float T) {
     p_ref = 1013.25;
     T_ref = 293.15;
   }
-  const float Rd = 287.05f;                 // J/(kg·K)
-  const float g0 = 9.80665f;                // m/s^2
-  float Tbar = 0.5f * (T_ref + T);          // mean temperature (K)
-  return (Rd * Tbar / g0) * log(p_ref / p); // meters
+  const float Rd = 287.05f;                  // J/(kg·K)
+  const float g0 = 9.80665f;                 // m/s^2
+  float Tbar = 0.5f * (T_ref + T);           // mean temperature (K)
+  return (Rd * Tbar / g0) * log(p_ref / p);  // meters
 }
 
 /* ---------- LOOP --------------------------------------------------- */
@@ -242,7 +239,7 @@ void loop() {
   if (SIMULATION_MODE) {
     Serial1.println("DATAREQUEST");
     String line = Serial1.readStringUntil('\n');
-    line.trim(); // remove newline or spaces
+    line.trim();  // remove newline or spaces
 
     int lastIndex = 0;
     int index = 0;
@@ -250,8 +247,7 @@ void loop() {
 
     for (int i = 0; i < line.length(); i++) {
       if (line[i] == ',' || i == line.length() - 1) {
-        String part =
-            line.substring(lastIndex, (i == line.length() - 1) ? i + 1 : i);
+        String part = line.substring(lastIndex, (i == line.length() - 1) ? i + 1 : i);
         values[index++] = part.toFloat();
         lastIndex = i + 1;
       }
@@ -271,8 +267,7 @@ void loop() {
     }
   } else {
     adxl345.readAccelerometer(&accel_x, &accel_y, &accel_z);
-    adxl375.readAccelerometer(&accel_x_high_g, &accel_y_high_g,
-                              &accel_z_high_g);
+    adxl375.readAccelerometer(&accel_x_high_g, &accel_y_high_g, &accel_z_high_g);
     lps22.readPressure(&pressure);
     lps22.readTemperature(&temperature);
   }
@@ -287,16 +282,15 @@ void loop() {
     }
   }
 
-  const String logMessage =
-      String(millis()) + ", " + String(accel_x) + ", " + // ADXL345
-      String(accel_y) + ", " + String(accel_z) + ", " + String(accel_x_high_g) +
-      ", " + // ADXL375 (high-g)
-      String(accel_y_high_g) + ", " + String(accel_z_high_g) + ", " +
-      String(pressure) + ", " + String(temperature) + ", " + String(altitude) +
-      ", " + String(bno_x) + ", " + String(bno_y) + ", " + String(bno_z) +
-      ", " + String(bno_i) + ", " + String(bno_j) + ", " + String(bno_k) +
-      ", " + String(bno_real) + ", " + stateToString(state) + ", " +
-      String(airbrake_pct) + ", " + String(airbrake_direction);
+  const String logMessage = String(millis()) + ", " + String(accel_x) + ", " +  // ADXL345
+                            String(accel_y) + ", " + String(accel_z) + ", " +
+                            String(accel_x_high_g) + ", " +  // ADXL375 (high-g)
+                            String(accel_y_high_g) + ", " + String(accel_z_high_g) + ", " +
+                            String(pressure) + ", " + String(temperature) + ", " +
+                            String(altitude) + ", " + String(bno_x) + ", " + String(bno_y) + ", " +
+                            String(bno_z) + ", " + String(bno_i) + ", " + String(bno_j) + ", " +
+                            String(bno_k) + ", " + String(bno_real) + ", " + stateToString(state) +
+                            ", " + String(airbrake_pct) + ", " + String(airbrake_direction);
 
   logging.log(logMessage.c_str());
 
@@ -307,134 +301,129 @@ void loop() {
 
   // State machine
   switch (state) {
-  case States::SENSOR_ERROR:
-    statusIndicator.solid(StatusIndicator::WHITE);
-    delay(50);
-    break;
-  case States::IDLE:
-    statusIndicator.solid(StatusIndicator::GREEN);
+    case States::SENSOR_ERROR:
+      statusIndicator.solid(StatusIndicator::WHITE);
+      delay(50);
+      break;
+    case States::IDLE:
+      statusIndicator.solid(StatusIndicator::GREEN);
 
-    if (accel_y > 8.0) {
-      state = States::IGNITION;
-      ignition_time = millis();
-    }
-
-    if (!hasCheckedForHorizontal) {
-      if (abs(accel_y) < abs(accel_x) || abs(accel_y) < abs(accel_z)) {
-        state = States::AIRBRAKE_TEST;
-        airbrake_direction = 1;
-        last_airbrake_update = 0;
-        airbrake_pct = AIRBRAKE_MIN;
+      if (accel_y > 8.0) {
+        state = States::IGNITION;
+        ignition_time = millis();
       }
-      hasCheckedForHorizontal = true;
-    }
-    break;
-  case States::AIRBRAKE_TEST:
-    statusIndicator.solid(StatusIndicator::BLUE);
 
-    // Sweep: 10% to 60% and back
-    if (millis() - last_airbrake_update >=
-        (airbrake_pct <= AIRBRAKE_MIN ? 3000 : 1000)) {
-      last_airbrake_update = millis();
-      airbrake_pct += AIRBRAKE_MAX * airbrake_direction;
-      if (airbrake_pct >= AIRBRAKE_MAX) {
-        airbrake_pct = AIRBRAKE_MAX;
-        airbrake_direction = -1;
-      } else if (airbrake_pct <= AIRBRAKE_MIN) {
-        airbrake_pct = AIRBRAKE_MIN;
-        airbrake_direction = 1;
+      if (!hasCheckedForHorizontal) {
+        if (abs(accel_y) < abs(accel_x) || abs(accel_y) < abs(accel_z)) {
+          state = States::AIRBRAKE_TEST;
+          airbrake_direction = 1;
+          last_airbrake_update = 0;
+          airbrake_pct = AIRBRAKE_MIN;
+        }
+        hasCheckedForHorizontal = true;
       }
-      airbrakes.setExtension(airbrake_pct);
-      airbrakes_2.setExtension(airbrake_pct);
-    }
+      break;
+    case States::AIRBRAKE_TEST:
+      statusIndicator.solid(StatusIndicator::BLUE);
 
-    break;
-  case States::IGNITION:
-    statusIndicator.solid(StatusIndicator::ORANGE);
+      // Sweep: 10% to 60% and back
+      if (millis() - last_airbrake_update >= (airbrake_pct <= AIRBRAKE_MIN ? 3000 : 1000)) {
+        last_airbrake_update = millis();
+        airbrake_pct += AIRBRAKE_MAX * airbrake_direction;
+        if (airbrake_pct >= AIRBRAKE_MAX) {
+          airbrake_pct = AIRBRAKE_MAX;
+          airbrake_direction = -1;
+        } else if (airbrake_pct <= AIRBRAKE_MIN) {
+          airbrake_pct = AIRBRAKE_MIN;
+          airbrake_direction = 1;
+        }
+        airbrakes.setExtension(airbrake_pct);
+        airbrakes_2.setExtension(airbrake_pct);
+      }
 
-    if (accel_y < 0) {
-      motor_burnout_time = millis();
-      state = States::ASCENT;
-    }
+      break;
+    case States::IGNITION:
+      statusIndicator.solid(StatusIndicator::ORANGE);
 
-    break;
-  case States::ASCENT:
-    statusIndicator.solid(StatusIndicator::RED);
+      if (accel_y < 0) {
+        motor_burnout_time = millis();
+        state = States::ASCENT;
+      }
 
-    max_altitude = max(max_altitude, altitude);
+      break;
+    case States::ASCENT:
+      statusIndicator.solid(StatusIndicator::RED);
 
-    if (!USE_CONTROL || i2cFallback) {
-      // Fallback: open-loop sweep if control Teensy unavailable
-      if (millis() - ignition_time > 12000 ||
-          millis() - motor_burnout_time > 8000) {
-        if (millis() - last_airbrake_update >=
-            (airbrake_pct <= AIRBRAKE_MIN ? 1500 : 1000)) {
-          last_airbrake_update = millis();
-          airbrake_pct += 25.0 * airbrake_direction;
-          if (airbrake_pct >= AIRBRAKE_MAX) {
-            airbrake_pct = AIRBRAKE_MAX;
-            airbrake_direction = -2;
-          } else if (airbrake_pct <= AIRBRAKE_MIN) {
-            airbrake_pct = AIRBRAKE_MIN;
-            airbrake_direction = 1;
+      max_altitude = max(max_altitude, altitude);
+
+      if (!USE_CONTROL || i2cFallback) {
+        // Fallback: open-loop sweep if control Teensy unavailable
+        if (millis() - ignition_time > 12000 || millis() - motor_burnout_time > 8000) {
+          if (millis() - last_airbrake_update >= (airbrake_pct <= AIRBRAKE_MIN ? 1500 : 1000)) {
+            last_airbrake_update = millis();
+            airbrake_pct += 25.0 * airbrake_direction;
+            if (airbrake_pct >= AIRBRAKE_MAX) {
+              airbrake_pct = AIRBRAKE_MAX;
+              airbrake_direction = -2;
+            } else if (airbrake_pct <= AIRBRAKE_MIN) {
+              airbrake_pct = AIRBRAKE_MIN;
+              airbrake_direction = 1;
+            }
+            airbrakes.setExtension(airbrake_pct);
+            airbrakes_2.setExtension(airbrake_pct);
           }
-          airbrakes.setExtension(airbrake_pct);
-          airbrakes_2.setExtension(airbrake_pct);
         }
       }
-    }
-    // Closed-loop control is handled by ControlPacket/CommandPacket below
+      // Closed-loop control is handled by ControlPacket/CommandPacket below
 
-    // Check for apogee conditions (time based)
-    if (millis() - ignition_time > 30000) {
-      airbrakes.setExtension(AIRBRAKE_MIN);
-      airbrakes_2.setExtension(AIRBRAKE_MIN);
-      airbrake_pct = AIRBRAKE_MIN;
-      airbrake_direction = 1;
-      state = States::APOGEE;
-      fire_time = millis();
-    }
+      // Check for apogee conditions (time based)
+      if (millis() - ignition_time > 30000) {
+        airbrakes.setExtension(AIRBRAKE_MIN);
+        airbrakes_2.setExtension(AIRBRAKE_MIN);
+        airbrake_pct = AIRBRAKE_MIN;
+        airbrake_direction = 1;
+        state = States::APOGEE;
+        fire_time = millis();
+      }
 
-    break;
-  case States::APOGEE:
-    statusIndicator.solid(StatusIndicator::RED);
+      break;
+    case States::APOGEE:
+      statusIndicator.solid(StatusIndicator::RED);
 
-    primaryIgniter.fire();
+      primaryIgniter.fire();
 
-    if (millis() - fire_time > 2000) {
-      state = States::DESCENT;
-    }
+      if (millis() - fire_time > 2000) {
+        state = States::DESCENT;
+      }
 
-    break;
-  case States::DESCENT:
-    statusIndicator.solid(StatusIndicator::BLUE);
+      break;
+    case States::DESCENT:
+      statusIndicator.solid(StatusIndicator::BLUE);
 
-    if (altitude < 5.0) {
-      state = States::LANDED;
-    }
+      if (altitude < 5.0) {
+        state = States::LANDED;
+      }
 
-    break;
-  case States::LANDED:
-    statusIndicator.solid(StatusIndicator::GREEN);
+      break;
+    case States::LANDED:
+      statusIndicator.solid(StatusIndicator::GREEN);
 
-    break;
-  default:
-    state = States::IDLE;
-    break;
+      break;
+    default:
+      state = States::IDLE;
+      break;
   }
 
   delay(50);
 
   // ---------- Control Teensy I2C: send ControlPacket, receive CommandPacket ----------
-  if (USE_CONTROL && !i2cFallback &&
-      (millis() - lastControlSend >= CONTROL_INTERVAL_MS)) {
-
+  if (USE_CONTROL && !i2cFallback && (millis() - lastControlSend >= CONTROL_INTERVAL_MS)) {
     // Build ControlPacket
     ControlPacket ctrlPkt;
     ctrlPkt.time_ms = millis();
     ctrlPkt.pressure = pressure;
     ctrlPkt.temperature = temperature;
-    ctrlPkt.accel_z_low_g = accel_y;     // Y-axis is thrust axis
+    ctrlPkt.accel_z_low_g = accel_y;  // Y-axis is thrust axis
     ctrlPkt.accel_z_high_g = accel_y_high_g;
     ctrlPkt.baro_altitude = altitude;
     ctrlPkt.flight_state = static_cast<uint8_t>(state);
@@ -455,8 +444,7 @@ void loop() {
       i2cFailCount = 0;
 
       // Request CommandPacket back from Teensy
-      uint8_t bytesRead = Wire.requestFrom(CTRL_TEENSY_ADDR,
-                                            (uint8_t)sizeof(CommandPacket));
+      uint8_t bytesRead = Wire.requestFrom(CTRL_TEENSY_ADDR, (uint8_t)sizeof(CommandPacket));
       if (bytesRead == sizeof(CommandPacket)) {
         CommandPacket cmdPkt;
         uint8_t *cmdBuf = (uint8_t *)&cmdPkt;

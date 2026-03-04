@@ -8,10 +8,8 @@ void Bilda::begin(int servoPin) {
 }
 
 void Bilda::setExtension(float percentage) {
-  if (percentage < 0.0)
-    percentage = 0.0;
-  if (percentage > 100.0)
-    percentage = 100.0;
+  if (percentage < 0.0) percentage = 0.0;
+  if (percentage > 100.0) percentage = 100.0;
 
   // Linear mapping: 0% -> 500us, 100% -> 2500us
   // 500 + (percentage * 20.0)

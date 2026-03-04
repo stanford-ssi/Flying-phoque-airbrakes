@@ -2,7 +2,7 @@
 #define IGNITER_H
 
 class Igniter {
-public:
+ public:
   Igniter(int igniterPin, int sensePin);
   void arm();
   void disarm();
@@ -13,7 +13,7 @@ public:
   bool igniterCheck();
   int readSensePin();
 
-private:
+ private:
   int igniterPin;
   int sensePin;
   bool armed;

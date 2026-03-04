@@ -3,20 +3,15 @@
 
 #include <Wire.h>
 
-enum ADXL_TYPE
-{
-  ADXL345,
-  ADXL375
-};
+enum ADXL_TYPE { ADXL345, ADXL375 };
 
-class Adxl
-{
-public:
+class Adxl {
+ public:
   Adxl(uint8_t address, ADXL_TYPE adxlType);
   bool begin();
   void readAccelerometer(float *x, float *y, float *z);
 
-private:
+ private:
   // TwoWire Wire;
   void writeRegister(uint8_t reg, uint8_t value);
   uint8_t readRegister(uint8_t reg);
