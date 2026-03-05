@@ -1,5 +1,5 @@
 #define I2C_BUFFER_LENGTH 128
-#define DEBUG_MODE 0  // Set to 0 for flight, 1 for bench testing
+#define DEBUG_MODE 1  // Set to 0 for flight, 1 for bench testing
 
 #include <Arduino.h>
 #include <Globals.h>
@@ -15,7 +15,7 @@
 #include <sensor_drivers/BNO.h>
 #include <sensor_drivers/Lps22.h>
 
-#define SIMULATION_MODE 0
+#define SIMULATION_MODE 1
 #define USE_BNO080 1
 #define USE_TELEMETRY 0
 
@@ -45,7 +45,6 @@ States state = States::BOOT;
 int failed_sensors = 0;
 
 // Timers
-int last_sd_write = 0;
 unsigned long last_loop_time = 0;
 
 static struct {
@@ -99,19 +98,17 @@ static float altitudeDelta(float p, float T) {
 static float readSensors() {
 #if SIMULATION_MODE
   Serial1.println("DATAREQUEST");
-  String line = Serial1.readStringUntil('\n');
-  line.trim();
+  char buf[128];
+  int len = Serial1.readBytesUntil('\n', buf, sizeof(buf) - 1);
+  buf[len] = '\0';
 
-  int lastIndex = 0;
-  int index = 0;
   float values[6];
-
-  for (int i = 0; i < (int)line.length(); i++) {
-    if (line[i] == ',' || i == (int)line.length() - 1) {
-      String part = line.substring(lastIndex, (i == (int)line.length() - 1) ? i + 1 : i);
-      values[index++] = part.toFloat();
-      lastIndex = i + 1;
-    }
+  int index = 0;
+  // this is fine cuz it's singlethreaded but like erm
+  char *tok = strtok(buf, ",");
+  while (tok && index < 6) {
+    values[index++] = strtof(tok, nullptr);
+    tok = strtok(nullptr, ",");
   }
 
   if (index >= 6) {
@@ -168,7 +165,7 @@ static void sendControlPacket(float altitude) {
     }
   } else {
     I2CControl.failCount = 0;
-
+    delayMicroseconds(200);  // let Teensy I2C slave settle before read
     uint8_t bytesRead = Wire.requestFrom(CTRL_TEENSY_ADDR, (uint8_t)sizeof(CommandPacket));
     if (bytesRead == sizeof(CommandPacket)) {
       CommandPacket cmdPkt;
@@ -193,25 +190,6 @@ static void sendControlPacket(float altitude) {
   }
 
   I2CControl.lastSend = millis();
-}
-
-static void logTelemetry(float altitude) {
-  LogBuffer buf;
-
-  buf.append("%lu", millis());
-  buf.append(",%.2f,%.2f,%.2f", sensors.accel_x, sensors.accel_y, sensors.accel_z);
-  buf.append(",%.2f,%.2f,%.2f", sensors.accel_x_high_g, sensors.accel_y_high_g, sensors.accel_z_high_g);
-  buf.append(",%.2f,%.2f,%.2f", sensors.pressure, sensors.temperature, altitude);
-  buf.append(",%.2f,%.2f,%.2f", sensors.bno_x, sensors.bno_y, sensors.bno_z);
-  buf.append(",%.4f,%.4f,%.4f,%.4f", sensors.bno_i, sensors.bno_j, sensors.bno_k, sensors.bno_real);
-  buf.append(",%s,%.1f,%d,%u", stateToString(state), BrakeState.pct, BrakeState.direction, sensors.potentiometer_value);
-
-  logging.log(buf.str());
-
-  if (millis() - last_sd_write > 1000) {
-    logging.flush();
-    last_sd_write = millis();
-  }
 }
 
 void setup() {
@@ -248,14 +226,15 @@ void setup() {
   }
   Serial1.println(F("SD card initialized"));
 
+#if !SIMULATION_MODE
   initSensor(adxl345, "ADXL345");
   initSensor(adxl375, "ADXL375");
   initSensor(lps22, "LPS22");
 #if USE_BNO080
   initSensor(bno080, "BNO080");
 #endif
-
   calibrateSensors(lps22);
+#endif
 
   logging.log(
       "Time,Xg,Yg,Zg,Xhg,Yhg,Zhg,Pressure,Temperature,Altitude,"
@@ -282,5 +261,5 @@ void loop() {
   float altitude = readSensors();
   updateStateMachine(altitude);
   sendControlPacket(altitude);
-  logTelemetry(altitude);
+  logging.logTelemetry(altitude, sensors, BrakeState, state);
 }

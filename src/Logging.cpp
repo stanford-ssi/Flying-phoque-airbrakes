@@ -2,6 +2,7 @@
 
 #include <RTClib.h>
 #include <SD.h>
+#include <States.h>
 
 RTC_DS3231 rtc;
 bool rtc_ready = false;
@@ -86,17 +87,52 @@ bool Logging::begin() {
 
 void Logging::log(const char *message, bool newline) {
   if (debug) {
-    if (newline) Serial1.println(message);
-    else Serial1.print(message);
+    if (newline)
+      Serial1.println(message);
+    else
+      Serial1.print(message);
   }
   if (logToSD) {
-    if (newline) dataFile.println(message);
-    else dataFile.print(message);
+    if (newline)
+      dataFile.println(message);
+    else
+      dataFile.print(message);
   }
 }
 
 void Logging::flush() {
   if (logToSD) {
     dataFile.flush();
+  }
+}
+
+void Logging::logTelemetry(float altitude, const SensorData_t &sens, const BrakeState_t &brake, States st) {
+  LogBuffer buf;
+  buf.appendLong(millis());
+  buf.field(sens.accel_x);
+  buf.field(sens.accel_y);
+  buf.field(sens.accel_z);
+  buf.field(sens.accel_x_high_g);
+  buf.field(sens.accel_y_high_g);
+  buf.field(sens.accel_z_high_g);
+  buf.field(sens.pressure);
+  buf.field(sens.temperature);
+  buf.field(altitude);
+  buf.field(sens.bno_x);
+  buf.field(sens.bno_y);
+  buf.field(sens.bno_z);
+  buf.field(sens.bno_i, 4);
+  buf.field(sens.bno_j, 4);
+  buf.field(sens.bno_k, 4);
+  buf.field(sens.bno_real, 4);
+  buf.field(stateToString(st));
+  buf.field(brake.pct, 1);
+  buf.field(brake.direction);
+  buf.field((int)sens.potentiometer_value);
+  log(buf.str());
+
+  if (millis() - lastFlush > 1000) {
+    flush();
+    lastFlush = millis();
   }
 }
