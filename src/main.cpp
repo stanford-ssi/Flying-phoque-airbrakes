@@ -23,6 +23,8 @@
 #include <telemetry/telStruct.h>
 #include <control/ControlStruct.h>
 
+#include <Radio.h>
+
 const bool SIMULATION_MODE = false;
 const bool USE_BNO080 = true;
 const float AIRBRAKE_MIN = 10.0;
@@ -94,6 +96,9 @@ int last_sd_write = 0;
 void splitString(String data, char delimiter, String parts[],
                  int maxParts) { /* unchanged */ }
 
+/* -------------- Radio -------------------*/
+Radio radio(/*Please insert*/);
+
 /* ---------- SETUP -------------------------------------------------- */
 void setup() {
   Serial1.begin(115200);
@@ -123,6 +128,12 @@ void setup() {
   SPI.setMISO(PinDefs.SDO);
   SPI.setSCLK(PinDefs.SCK);
   SPI.begin();
+
+  // Radio
+  if (!radio.begin(915.0, 20)) {
+    Serial1.println("Radio init failed");
+    failedSensors++;
+}
 
   // ---------------- SD / Logging ----------------
   while (!logging.begin()) {
@@ -482,4 +493,25 @@ void loop() {
 
     lastControlSend = millis();
   }
+
+
+    // Loop this somewhere, please add it somewhere
+    /*
+    TelemetryPacket pkt;
+    pkt.time_ms        = millis();
+    pkt.accel_x        = accel_x;
+    pkt.accel_y        = accel_y;
+    pkt.accel_z        = accel_z;
+    pkt.accel_x_high_g = accel_x_high_g;
+    pkt.accel_y_high_g = accel_y_high_g;
+    pkt.accel_z_high_g = accel_z_high_g;
+    pkt.pressure       = pressure;
+    pkt.temperature    = temperature;
+    pkt.altitude       = altitude;
+    pkt.airbrake_pct   = airbrake_pct;
+    pkt.airbrake_dir   = (int8_t)airbrake_direction;
+    pkt.state          = (uint8_t)state;
+
+    radio.sendTelemetry(pkt);
+    */
 }
